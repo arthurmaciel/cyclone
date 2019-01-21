@@ -355,7 +355,8 @@
     ;(write `(DEBUG ,body))
     (string-append 
      preamble 
-     (c:serialize body "  ") ;" ;\n"
+     (c:serialize body "  ") 
+     " ;\n"
 ;     "int main (int argc, char* argv[]) {\n"
 ;     "  return 0;\n"
 ;     " }\n"
