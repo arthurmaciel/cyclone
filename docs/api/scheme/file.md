@@ -8,6 +8,7 @@ For more information see the [R<sup>7</sup>RS Scheme Specification](../../r7rs.p
 - [`call-with-output-file`](#call-with-output-file)
 - [`with-input-from-file`](#with-input-from-file)
 - [`with-output-to-file`](#with-output-to-file)
+- [`file-exists?`](#file-exists?)
 
 # call-with-input-file
 
@@ -32,3 +33,15 @@ Open given filename for input and change the current input to that port for the 
     (with-output-to-file string thunk)
 
 Open given filename for output and change the current output to that port for the duration of `thunk`.
+
+# file-exists?
+    (file-exists? string)
+
+Returns #t if the named file exists at the time the procedure is called, and #f otherwise. It is an error if filename is not a string.
+
+# delete-file
+    (delete-file string)
+
+According to R7RS it deletes the named file if it exists and can be deleted, and returns an unspecified value.
+If the file does not exist or cannot be deleted, an error that satisfies file-error? is signaled. In Cyclone it return `#f` if no file was found and `#t` if file was found and deleted.
+
