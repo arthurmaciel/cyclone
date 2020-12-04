@@ -15,7 +15,8 @@
 ;;;;
 (define-library (scheme cyclone libraries)
   (import (scheme base)
-          ;; Debugging: (scheme write)
+          ;; Debug only 
+          (scheme write)
           (scheme read)
           (scheme process-context)
           (scheme cyclone util)
@@ -239,12 +240,38 @@
       (lambda (d acc) 
         (cond
           ((tagged-list? 'cond-expand d)
-           (cons (expander d) acc))
-           ;(lib:cond-expand-decls (expander d)))
+           ;; Can have more than one ce expression, EG:
+           ;; (cond-expand
+           ;;  (cyclone
+           ;;    (import ...)
+           ;;    (export ...)
+           ;;
+           ;;  TODO: handle this properly
+           (let* ((expr (expander d)))
+             (cond
+              ;; Special case, multiple sub-expressions
+              ((and (pair? expr)
+                    (lambda? (car expr))
+                    (eq? '() (lambda->formals (car expr))))
+               (append 
+                 (reverse ;; Preserve order
+                   (map form-ce-expr (lambda->exp (car expr))))
+                 acc))
+              (else
+               (cons (form-ce-expr expr) acc)))))
           (else
             (cons d acc)) ))
       '() 
      decls)))
+
+(define (form-ce-expr expr)
+  (cond
+   ((and (pair? expr)
+         (not (member (car expr) 
+                     '(import export c-linker-options include-c-header))))
+    `(begin ,expr))
+   (else
+    expr)))
 
 (define (lib:atom->string atom)
   (cond
@@ -372,12 +399,15 @@
 
 ;; Given a single import from an import-set, open the corresponding
 ;; library file and retrieve the library's import-set.
-(define (lib:read-imports import append-dirs prepend-dirs)
+(define (lib:read-imports import append-dirs prepend-dirs expander)
   (let* ((lib-name (lib:import->library-name import))
          (dir (lib:import->filename lib-name ".sld" append-dirs prepend-dirs))
          (fp (open-input-file dir))
          (lib (read-all fp))
-         (imports (lib:imports (car lib))))
+         (lib* (if expander
+                   (list (lib:cond-expand (car lib) expander))
+                   lib))
+         (imports (lib:imports (car lib*))))
     (close-input-port fp)
     imports))
 
@@ -410,12 +440,15 @@
     " "))
 
 ;; Read export list for a given import
-(define (lib:import->export-list import append-dirs prepend-dirs)
+(define (lib:import->export-list import append-dirs prepend-dirs expander)
   (let* ((lib-name (lib:import->library-name import))
          (dir (string-append (lib:import->filename lib-name ".sld" append-dirs prepend-dirs)))
          (fp (open-input-file dir))
          (lib (read-all fp))
-         (exports (lib:exports (car lib))))
+         (lib* (if expander
+                   (list (lib:cond-expand (car lib) expander))
+                   lib))
+         (exports (lib:exports (car lib*))))
     (close-input-port fp)
     (lib:import-set/exports->imports import exports)))
 
@@ -521,7 +554,7 @@
 ;;
 ;; TODO: convert this to use a hashtable. Initially a-lists
 ;; will be used to prove out the concept, but this is inefficient
-(define (lib:imports->idb imports append-dirs prepend-dirs)
+(define (lib:imports->idb imports append-dirs prepend-dirs expander)
  (apply
    append
    (map 
@@ -533,7 +566,7 @@
               (cons id lib-name)
               ids))
           '()
-           (lib:import->export-list import-set append-dirs prepend-dirs))))
+           (lib:import->export-list import-set append-dirs prepend-dirs expander))))
      (map lib:list->import-set imports))))
 
 ;; Convert from the import DB to a list of identifiers that are imported.
@@ -606,7 +639,7 @@
 ;; Given an import set, get all dependant import names that are required
 ;; The list of deps is intended to be returned in order, such that the
 ;; libraries can be initialized properly in sequence.
-(define (lib:get-all-import-deps imports append-dirs prepend-dirs)
+(define (lib:get-all-import-deps imports append-dirs prepend-dirs expander)
   (letrec ((libraries/deps '())
          (find-deps! 
           (lambda (import-sets)
@@ -618,7 +651,7 @@
                    ;; Prevent cycles by only processing new libraries
                    ((not (assoc lib-name libraries/deps))
                     ;; Find all dependencies of i (IE, libraries it imports)
-                    (let* ((deps (lib:read-imports import-set append-dirs prepend-dirs))
+                    (let* ((deps (lib:read-imports import-set append-dirs prepend-dirs expander))
                            (dep-libs (map lib:import->library-name deps)))
                      (set! 
                        libraries/deps 

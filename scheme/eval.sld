@@ -14,7 +14,7 @@
     (scheme cyclone primitives)
     (scheme base)
     (scheme file)
-    (scheme write) ;; Only used for debugging
+    ;(scheme write) ;; Only used for debugging
     (scheme read))
   (export
     ;environment
@@ -116,6 +116,7 @@
 (define (self-evaluating? exp)
   (cond ((number? exp) #t)
         ((boolean? exp) #t)
+        ((eq? (void) exp) #t) ;; Poor man's (void?)
         ((string? exp) #t)
         ((vector? exp) #t)
         ((bytevector? exp) #t)
@@ -159,7 +160,7 @@
 (define (if-alternative exp)
   (if (not (null? (cdddr exp))) ;; TODO: add (not) support
       (cadddr exp)
-      #f))
+      (void)))
 (define (make-if predicate consequent alternative)
   (list 'if predicate consequent alternative))
 
@@ -378,7 +379,10 @@
                           (primitive-procedure-objects)
                           env:the-empty-environment))
 (define *initial-environment* (create-initial-environment))
-(define *global-environment* (setup-environment (create-initial-environment)))
+(define *global-environment* 
+  (env:extend-environment 
+    '() '() 
+    (setup-environment (create-initial-environment))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; This step separates syntactic analysis from execution.
@@ -741,6 +745,17 @@
   (set! *append-dirs* append-dirs)
   (set! *prepend-dirs* prepend-dirs))
 
+(define (base-expander)
+  (let ((rename-env (env:extend-environment '() '() '()))
+        ;(macros (filter 
+        ;          (lambda (v) 
+        ;            (Cyc-macro? (Cyc-get-cvar (cdr v))))
+        ;          (Cyc-global-vars)))
+        )
+    ;(macro:load-env! macros (create-environment '() '()))
+    (lambda (ex) 
+      (expand ex (macro:get-env) rename-env))))
+
 ;; TODO: right now this is a hack, just get all the imports sets and call their entry point
 ;; function to initialize them. longer-term will need to only load the specific identifiers
 ;; called out in the import sets
@@ -751,7 +766,11 @@
         (explicit-lib-names 
           (map lib:import->library-name (lib:list->import-set import-sets)))
         ;; All dependent libraries
-        (lib-names (lib:get-all-import-deps import-sets *append-dirs* *prepend-dirs*)))
+        (lib-names (lib:get-all-import-deps import-sets *append-dirs* *prepend-dirs* base-expander))
+        (renamed-syms (filter pair?
+                        (map car 
+                          (lib:imports->idb import-sets *append-dirs* *prepend-dirs* base-expander))))
+        )
     (for-each
       (lambda (lib-name)
         (let* ((us (lib:name->unique-string lib-name))
@@ -765,7 +784,25 @@
             ;(begin (write `(,lib-name ,us ,loaded? is already loaded skipping)) (newline))
            )))
       lib-names)
-    (set! *global-environment* (setup-environment *initial-environment*))
+
+        ;(newline)
+        ;(display "/* ")
+        ;(write (list 'DEBUG-GLO-ENV *global-environment*))
+        ;(display "*/ ")
+
+    (set! *global-environment* 
+          (cons
+            (car *global-environment*)
+            (setup-environment *initial-environment*)))
+
+    ;; Load any renamed exports into the environment
+    (for-each
+      (lambda (rename/base)
+        (env:define-variable! 
+          (car rename/base)
+          (env:_lookup-variable-value (cdr rename/base) *global-environment*)
+          *global-environment*))
+      renamed-syms)
     #t))
 
 ;; Is the given library loaded?
@@ -823,11 +860,14 @@
              (result #f))
         ;(newline)
         ;(display "/* ")
-        ;(write (list 'macro:expand exp macro compiled-macro? local-renamed))
+        ;(write (list 'macro:expand exp (memloc exp) (assoc exp *source-loc-lis*) macro compiled-macro? local-renamed))
         ;(display "*/ ")
 
           ;; Invoke ER macro
         (set! result
+         (with-handler
+          (lambda (err)
+            (apply error/loc (append (list (car err) exp) (cdr err))) )
           (cond
             ((not macro)
               (error "macro not found" exp))
@@ -843,7 +883,7 @@
                   (list 'quote exp)
                   (Cyc-er-rename use-env mac-env local-renamed)
                   (Cyc-er-compare? use-env rename-env))
-                mac-env))))
+                mac-env)))))
         ;(newline)
         ;(display "/* ")
         ;(write (list 'macro:expand exp macro compiled-macro?))
@@ -942,12 +982,12 @@
 ;; local-env - Local macro definitions, used by let-syntax
 ;; local-renamed - Renamed local variables introduced by lambda expressions
 (define (_expand exp env rename-env local-env local-renamed)
-  (define (log e)
-    (display  
-      (list 'expand e 'env 
-        (env:frame-variables (env:first-frame env))) 
-      (current-error-port))
-    (newline (current-error-port)))
+  ;(define (log e)
+  ;  (display  
+  ;    (list 'expand e 'env 
+  ;      (env:frame-variables (env:first-frame env))) 
+  ;    (current-error-port))
+  ;  (newline (current-error-port)))
   ;(log exp)
 ;(display "/* ")
 ;(write `(expand ,exp))
@@ -957,6 +997,11 @@
 ;(newline)
   (cond
     ((const? exp)      exp)
+    ;; Null and Improper lists are just consts, no need to expand
+    ((null? exp)      exp)
+    ((and (pair? exp)
+          (not (list? exp)))
+     exp)
     ((and (prim? exp) ;; Allow lambda vars to shadown primitives
           (not (assoc exp local-renamed)))
      exp)
@@ -1022,7 +1067,7 @@
                                  ;; Insert default value for missing else clause
                                  ;; FUTURE: append the empty (unprinted) value
                                  ;; instead of #f
-                                 #f)))
+                                 (void))))
     ((define-c? exp) exp)
     ((define-syntax? exp)
      ;(trace:info `(define-syntax ,exp))
@@ -1188,11 +1233,11 @@
   (_expand-body result exp env rename-env '() '()))
 
 (define (_expand-body result exp env rename-env local-env local-renamed)
-  (define (log e)
-    (display (list 'expand-body e 'env 
-              (env:frame-variables (env:first-frame env))) 
-             (current-error-port))
-    (newline (current-error-port)))
+  ;(define (log e)
+  ;  (display (list 'expand-body e 'env 
+  ;            (env:frame-variables (env:first-frame env))) 
+  ;           (current-error-port))
+  ;  (newline (current-error-port)))
 
   (if (null? exp) 
     (reverse result)

@@ -1,8 +1,10 @@
 Steps for making a release of Cyclone:
 
+- Sync latest bootstrap code, including cyclone and cyclone-winds
 - Prepare release notes
 - Update release number in:
   - `common.sld` and rebuild bootstrap source files
+  - `Dockerfile`
   - `DEBIAN/control` in cyclone-bootstrap
   - `.github/workflows/Release.yml` job in cyclone-bootstrap
 - Update documentation, if applicable

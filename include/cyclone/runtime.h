@@ -32,6 +32,12 @@ extern const object quote_void;
 extern const object Cyc_EOF;
 
 /**
+ * The void value.
+ * \ingroup objects
+ */
+extern const object Cyc_VOID;
+
+/**
  * \ingroup gc_minor
  */
 void GC(void *, closure, object *, int);
@@ -437,6 +443,7 @@ double MRG32k3a (double seed);
  */
 /**@{*/
 //object Cyc_eq(object x, object y);
+object Cyc_eqv(object x, object y);
 #define Cyc_eq(x, y) (make_boolean(x == y))
 int equal(object, object);
 object equalp(object, object);
@@ -480,6 +487,7 @@ object Cyc_is_procedure(void *data, object o);
 //object Cyc_is_opaque(object o);
 #define Cyc_is_macro(o)       (make_boolean(is_object_type(o) && ((list) o)->tag == macro_tag))
 #define Cyc_is_eof_object(o)  (make_boolean(is_object_type(o) && ((list) o)->tag == eof_tag))
+#define Cyc_is_void_object(o) (make_boolean(is_object_type(o) && ((list) o)->tag == void_tag))
 #define Cyc_is_cvar(o)        (make_boolean(is_object_type(o) && ((list) o)->tag == cvar_tag))
 #define Cyc_is_opaque(o)      (make_boolean(is_object_type(o) && ((list) o)->tag == c_opaque_tag))
 object Cyc_is_immutable(object obj);
@@ -526,8 +534,8 @@ object Cyc_string2utf8(void *data, object cont, object str, object start,
  * @brief Functions for interacting with the system
  */
 /**@{*/
-int _cyc_argc;
-char **_cyc_argv;
+extern int _cyc_argc;
+extern char **_cyc_argv;
 object Cyc_installation_dir(void *data, object cont, object type);
 object Cyc_compilation_environment(void *data, object cont, object var);
 object Cyc_command_line_arguments(void *data, object cont);

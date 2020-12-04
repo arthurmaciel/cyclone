@@ -86,6 +86,14 @@
     ((lambda () (- x y)))) 5 4)
   1)
 
+;; Anonymous lambda's
+(assert:equal "execute anonymous lambda" ((lambda (a . Y) Y) 'x) '())
+(assert:equal "execute anonymous lambda" ((lambda (a . Y) Y) 'x 'y) '(y))
+(assert:equal "execute anonymous lambda" ((lambda (a . Y) Y) 'x 'y 'z) '(y z)) 
+(assert:equal "execute anonymous lambda" ((lambda (a b . Y) Y) 'x 'y 'z) '(z))
+(assert:equal "execute anonymous lambda" ((lambda Y Y) 'x 'y 'z) '(x y z))
+(assert:equal "execute anonymous lambda" ((lambda Y Y) ) '())
+
 ;; Factorial
 (define (fac n) (if (= n 0) 1 (* n (fac (- n 1)))))
 (assert:equal "Factorial example" (fac 10) 3628800)
@@ -157,6 +165,14 @@
     "abcde")
   (assert:equal "string-for-each" v '(101 100 99 98 97)))
 
+(assert:equal "interline whitespace" "1 2 \      
+3 4" "1 2 3 4")
+
+(assert:equal "interline whitespace" "1 2 \
+
+
+3 4" "1 2 \n\n3 4")
+
 ;; UTF-8 / Strings
 (assert:equal "UTF8 string length" (string-length (make-string 1 (integer->char 128))) 1)
 (assert:equal "UTF8 bv length" (bytevector-length (string->utf8 (make-string 1 (integer->char 128)))) 2)
@@ -202,6 +218,12 @@
 (assert:equal "" (symbol->string 'a/test-01) "a/test-01")
 (assert:equal "" (eq? 'a-1 'a-1) #t)
 (assert:equal "" (eq? (string->symbol "aa") 'aa) #t)
+(assert:equal "" (eq? 0.0 0.0) #f)
+(assert:equal "" (eq? 33333333333333 33333333333333) #f)
+(assert:equal "" (eqv? 'a-1 'a-1) #t)
+(assert:equal "" (eqv? (string->symbol "aa") 'aa) #t)
+(assert:equal "" (eqv? 0.0 0.0) #t)
+(assert:equal "" (eqv? 33333333333333 33333333333333) #t)
 (assert:equal "" (equal? (string->symbol "aa") 'aa) #t)
 
 ;; Map

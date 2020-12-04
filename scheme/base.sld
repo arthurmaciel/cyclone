@@ -72,6 +72,11 @@
     string<=?
     string>?
     string>=?
+    fast-string=?
+    fast-string<?
+    fast-string<=?
+    fast-string>?
+    fast-string>=?
     foldl
     foldr
     not
@@ -125,6 +130,7 @@
     error-object-irritants
     ; TODO: file-error?
     ; TODO: read-error?
+    error/loc
     error
     raise
     raise-continuable
@@ -135,6 +141,8 @@
     newline
     write-char
     write-string
+    write-string-1
+    write-string-2
     flush-output-port
     peek-char
     read-char
@@ -178,6 +186,7 @@
     exact
     inexact
     eof-object
+    void
     syntax-error
     bytevector-copy
     bytevector-copy!
@@ -217,11 +226,11 @@
     zero?
     list?
     not
-    string>=?
-    string>?
-    string<=?
-    string<?
-    string=?
+    fast-string>=?
+    fast-string>?
+    fast-string<=?
+    fast-string<?
+    fast-string=?
   )
   (begin
     ;; Features implemented by this Scheme
@@ -268,10 +277,10 @@
     (define-syntax let
       (er-macro-transformer
         (lambda (expr rename compare)
-          (if (null? (cdr expr)) (error "empty let" expr))
-          (if (null? (cddr expr)) (error "no let body" expr))
+          (if (null? (cdr expr)) (error/loc "empty let" expr))
+          (if (null? (cddr expr)) (error/loc "no let body" expr))
           ((lambda (bindings)
-             (if (list? bindings) #f (error "bad let bindings"))
+             (if (list? bindings) #f (error/loc "bad let bindings" expr))
              (if (every (lambda (x)
                           (if (pair? x) (if (pair? (cdr x)) (null? (cddr x)) #f) #f))
                         bindings)
@@ -286,13 +295,13 @@
                         `((,(rename 'lambda) ,vars ,@(cddr expr)) ,@vals)))
                   (map car bindings)
                   (map cadr bindings))
-                 (error "bad let syntax" expr)))
+                 (error/loc "bad let syntax" expr)))
            (if (symbol? (cadr expr)) (car (cddr expr)) (cadr expr))))))
     (define-syntax let*
       (er-macro-transformer
         (lambda (expr rename compare)
-          (if (null? (cdr expr)) (error "empty let*" expr))
-          (if (null? (cddr expr)) (error "no let* body" expr))
+          (if (null? (cdr expr)) (error/loc "empty let*" expr))
+          (if (null? (cddr expr)) (error/loc "no let* body" expr))
           (if (null? (cadr expr))
               `(,(rename 'let) () ,@(cddr expr))
               (if (if (list? (cadr expr))
@@ -303,10 +312,13 @@
                       #f)
                   `(,(rename 'let) (,(caar (cdr expr)))
                     (,(rename 'let*) ,(cdar (cdr expr)) ,@(cddr expr)))
-                  (error "bad let* syntax"))))))
+                  (error/loc "bad let* syntax" expr))))))
     (define-syntax letrec 
       (er-macro-transformer
         (lambda (exp rename compare)
+         (with-handler
+          (lambda (e)
+            (error/loc "unable to expand letrec" exp))
           (let* ((bindings  (cadr exp)) ;(letrec->bindings exp)
                  (namings   (map (lambda (b) (list (car b) #f)) bindings))
                  (names     (map car (cadr exp))) ;(letrec->bound-vars exp)
@@ -315,7 +327,7 @@
                                  bindings))
                  (args      (map cadr (cadr exp)))) ;(letrec->args exp)
             `(let ,namings
-               (begin ,@(append sets (cddr exp)))))))) ;(letrec->exp exp)
+               (begin ,@(append sets (cddr exp))))))))) ;(letrec->exp exp)
 ;; NOTE: chibi uses the following macro. turns vars into defines?
 ;;(define-syntax letrec
 ;;  (er-macro-transformer
@@ -366,7 +378,7 @@
                               (cond
                                 ((symbol? i) (symbol->string i))
                                 ((number? i) (number->string i))
-                                (else (error "Unexpected type in import set")))))
+                                (else (error/loc "Unexpected type in import set" expr)))))
                           import))
                       file-ext))
                    (filename
@@ -413,7 +425,7 @@
                 ((lambda (cl)
                    (if (compare (rename 'else) (car cl))
                        (if (pair? (cddr expr))
-                           (error "non-final else in cond" expr)
+                           (error/loc "non-final else in cond" expr)
                            (list (cons (rename 'lambda) (cons '() (cdr cl)))))
                        (if (if (null? (cdr cl)) #t (compare (rename '=>) (cadr cl)))
                            (list (list (rename 'lambda) (list (rename 'tmp))
@@ -467,16 +479,16 @@
     (define-syntax when
       (er-macro-transformer
         (lambda (exp rename compare)
-          (if (null? (cdr exp)) (error "empty when" exp))
-          (if (null? (cddr exp)) (error "no when body" exp))
+          (if (null? (cdr exp)) (error/loc "empty when" exp))
+          (if (null? (cddr exp)) (error/loc "no when body" exp))
           `(if ,(cadr exp)
                ((lambda () ,@(cddr exp)))
                #f))))
     (define-syntax unless
       (er-macro-transformer
         (lambda (exp rename compare)
-          (if (null? (cdr exp)) (error "empty unless" exp))
-          (if (null? (cddr exp)) (error "no unless body" exp))
+          (if (null? (cdr exp)) (error/loc "empty unless" exp))
+          (if (null? (cddr exp)) (error/loc "no unless body" exp))
           `(if ,(cadr exp)
                #f
                ((lambda () ,@(cddr exp)))))))
@@ -490,7 +502,7 @@
                   ,@(map (lambda (x)
                            (if (pair? (cddr x))
                                (if (pair? (cdr (cddr x)))
-                                   (error "too many forms in do iterator" x)
+                                   (error/loc "too many forms in do iterator" x)
                                    (car (cddr x)))
                                (car x)))
                          (cadr expr)))))
@@ -597,13 +609,17 @@
     (define (char>=? c1 c2 . cs) (Cyc-bin-op-char >= c1 (cons c2 cs)))
     ; TODO: char-ci predicates (in scheme/char library)
 
+    (define (string=? str1 str2 . strs)  (Cyc-bin-op fast-string=? str1 (cons str2 strs)))
+    (define (string<? str1 str2 . strs)  (Cyc-bin-op fast-string<? str1 (cons str2 strs)))
+    (define (string<=? str1 str2 . strs) (Cyc-bin-op fast-string<=? str1 (cons str2 strs)))
+    (define (string>? str1 str2 . strs)  (Cyc-bin-op fast-string>? str1 (cons str2 strs)))
+    (define (string>=? str1 str2 . strs) (Cyc-bin-op fast-string>=? str1 (cons str2 strs)))
 
-    (define (string=? str1 str2)  (equal? (string-cmp str1 str2) 0))
-    (define (string<? str1 str2)  (<  (string-cmp str1 str2) 0))
-    (define (string<=? str1 str2) (<= (string-cmp str1 str2) 0))
-    (define (string>? str1 str2)  (>  (string-cmp str1 str2) 0))
-    (define (string>=? str1 str2) (>= (string-cmp str1 str2) 0))
-    ; TODO: generalize to multiple arguments: (define (string<? str1 str2 . strs)
+    (define (fast-string=? str1 str2)  (equal? (string-cmp str1 str2) 0))
+    (define (fast-string<? str1 str2)  (<  (string-cmp str1 str2) 0))
+    (define (fast-string<=? str1 str2) (<= (string-cmp str1 str2) 0))
+    (define (fast-string>? str1 str2)  (>  (string-cmp str1 str2) 0))
+    (define (fast-string>=? str1 str2) (>= (string-cmp str1 str2) 0))
 
     (define (member-helper obj lst cmp-proc)
      (cond 
@@ -715,10 +731,22 @@
       (if (null? port)
         (Cyc-flush-output-port (current-output-port))
         (Cyc-flush-output-port (car port))))
-    (define (write-string str . port)
-      (if (null? port)
-        (Cyc-display str (current-output-port))
-        (Cyc-display str (car port))))
+    (define (write-string-1 str)
+      (Cyc-display str (current-output-port)))
+    (define (write-string-2 str port)
+      (Cyc-display str port))
+    (define (write-string str . opts)
+      (cond
+       ((null? opts)
+        (Cyc-display str (current-output-port)))
+       ((null? (cdr opts))
+        (Cyc-display str (car opts)))
+       (else 
+        (let ((start (cadr opts))
+              (end (if (> (length opts) 2) (caddr opts) (string-length str))))
+          (Cyc-display
+            (substring str start end)
+            (car opts))))))
     (define (read-bytevector k . _port)
       (letrec ((port (if (null? port)
                          (current-input-port)
@@ -873,6 +901,7 @@
         '()
        (cons (f (car lst1) (car lst2)) (Cyc-map-loop-2 f (cdr lst1) (cdr lst2)))))
     (define (Cyc-for-each-loop-1 f lst)
+<<<<<<< HEAD
       (unless (null? lst)
         (begin (f (car lst)) 
                (Cyc-for-each-loop-1 f (cdr lst)))))
@@ -880,6 +909,17 @@
       (unless (or (null? lst1) (null? lst2))
         (begin (f (car lst1) (car lst2)) 
                (Cyc-for-each-loop-2 f (cdr lst1) (cdr lst2)))))
+=======
+      (if (null? lst)
+       (void)
+       (begin (f (car lst)) 
+              (Cyc-for-each-loop-1 f (cdr lst)))))
+    (define (Cyc-for-each-loop-2 f lst1 lst2)
+      (if (or (null? lst1) (null? lst2))
+       (void)
+       (begin (f (car lst1) (car lst2)) 
+              (Cyc-for-each-loop-2 f (cdr lst1) (cdr lst2)))))
+>>>>>>> 4b3e874f20a2e3d739c9e4e9c2013d880bbb26f0
 
     (define (for-each f lis1 . lists)
       (if (not (null? lis1))
@@ -1252,6 +1292,41 @@
         }
         return_closcall1(data, k, thd->exception_handler_stack); ")
 
+    ;; Non-standard, used internally by Cyclone to report line number
+    ;; information for error messages
+    (define (error/loc reason expr . args)
+      ;(Cyc-write `(error/loc ,(map 
+      ;                (lambda (alis)
+      ;                  (list (car alis) 
+      ;                        (memloc (car alis))
+      ;                        (cdr alis)))
+      ;                *reader-source-db*)))
+      ;(Cyc-display "\n")
+      ;; Does reason already include line/file location info?
+      (define (reason/line-loc? reason)
+        (and (string? reason)
+             (equal? (substring reason 0 8)
+                     "at line ")))
+      (let* ((found (assoc expr *reader-source-db*))
+             (loc-vec (if found 
+                          (cdr found) ;; Get value
+                          #f))
+             (msg (if (and loc-vec ;; Have line info
+                           (not (reason/line-loc? reason))) ;; Not there yet
+                      (string-append
+                        "at line "
+                        (number->string (vector-ref loc-vec 1))
+                        ", column "
+                        (number->string (vector-ref loc-vec 2))
+                        " of "
+                        (vector-ref loc-vec 0)
+                        ": "
+                        reason)
+                      reason)))
+      (if (pair? args)
+        (apply error (cons msg args))
+        (error msg expr))))
+
   ;; Simplified versions of every/any from SRFI-1
   (define (any pred lst)
     (let any* ((l (map pred lst)))
@@ -1442,6 +1517,11 @@
     " return_closcall1(data, k, Cyc_EOF); "
     "(void *data, object ptr)"
     " return Cyc_EOF;")
+  (define-c void
+    "(void *data, int argc, closure _, object k)"
+    " return_closcall1(data, k, Cyc_VOID); "
+    "(void *data, object ptr)"
+    " return Cyc_VOID;")
   (define-c input-port?
     "(void *data, int argc, closure _, object k, object port)"
     " port_type *p = (port_type *)port;
@@ -1537,7 +1617,7 @@
            (_append (rename 'append))      (_map (rename 'map))
            (_vector? (rename 'vector?))    (_list? (rename 'list?))
            (_len (rename'len))             (_length (rename 'length))
-           (_- (rename '-))   (_>= (rename '>=))   (_error (rename 'error))
+           (_- (rename '-))   (_>= (rename '>=))   (_error (rename 'error/loc))
            (_ls (rename 'ls)) (_res (rename 'res)) (_i (rename 'i))
            (_reverse (rename 'reverse))
            (_vector->list (rename 'vector->list))
@@ -1713,7 +1793,7 @@
                       (ell-vars (free-vars (car t) vars ell-dim)))
                  (cond
                   ((null? ell-vars)
-                   (error "too many ...'s"))
+                   (error/loc "too many ...'s" expr))
                   ((and (null? (cdr (cdr t))) (identifier? (car t)))
                    ;; shortcut for (var ...)
                    (lp (car t) ell-dim))
@@ -1899,13 +1979,7 @@
 ;; Record-type definitions
 (define record-marker (list 'record-marker))
 (define (register-simple-type name parent field-tags)
-  (vector record-marker name field-tags)
-  ;(let ((new (make-vector 3 #f)))
-  ;  (vector-set! new 0 record-marker)
-  ;  (vector-set! new 1 name)
-  ;  (vector-set! new 2 field-tags)
-  ;  new)
-)
+  (vector record-marker name field-tags))
 (define (make-type-predicate pred name)
   (lambda (obj)
     (and (vector? obj)
@@ -1939,10 +2013,14 @@
   (vector-ref (vector-ref obj 2) idx)))
 (define (make-getter sym name idx)
   (lambda (obj)
-    (vector-ref (vector-ref obj 2) idx)))
+    (if (eq? (vector-ref obj 1) name)
+        (vector-ref (vector-ref obj 2) idx)
+        (error "Invalid type" obj 'expected name))))
 (define (make-setter sym name idx)
   (lambda (obj val)
-    (vector-set! (vector-ref obj 2) idx val)))
+    (if (eq? (vector-ref obj 1) name)
+        (vector-set! (vector-ref obj 2) idx val)
+        (error "Invalid type" obj 'expected name))))
 
 ;; Find index of element in list, or #f if not found
 (define _list-index
@@ -1959,7 +2037,8 @@
 (define (is-a? obj rtype)
   (and (record? obj)
        (record? rtype)
-       (equal? (vector-ref obj 1) rtype)))
+       (equal? (vector-ref obj 1) 
+               (vector-ref rtype 1))))
 
 (define-syntax define-record-type
   (er-macro-transformer
@@ -1967,7 +2046,6 @@
      (let* ((name+parent (cadr expr))
             (name (if (pair? name+parent) (car name+parent) name+parent))
             (parent (and (pair? name+parent) (cadr name+parent)))
-            (name-str (symbol->string name)) ;(identifier->symbol name)))
             (procs (cddr expr))
             (make (caar procs))
             (make-fields (cdar procs))
@@ -1985,11 +2063,11 @@
        `(,(rename 'begin)
          ;; type
          (,_define ,name (,_register 
-                          ,name-str 
+                          (quote ,name)
                           ,parent 
                           ',(map car fields)))
          ;; predicate
-         (,_define ,pred (,(rename 'make-type-predicate) 0 ,name))
+         (,_define ,pred (,(rename 'make-type-predicate) 0 (quote ,name)))
          ;; fields
          ,@(map (lambda (f)
                   (and (pair? f) (pair? (cdr f))
@@ -1999,7 +2077,7 @@
                              (cadr f)
                              ;(identifier->symbol (cadr f))
                             )
-                           ,name
+                           (quote ,name)
                            (,_type_slot_offset ,name ',(car f))))))
                 fields)
          ,@(map (lambda (f)
@@ -2010,7 +2088,7 @@
                              (car (cddr f))
                              ;(identifier->symbol (car (cddr f)))
                             )
-                           ,name
+                           (quote ,name)
                            (,_type_slot_offset ,name ',(car f))))))
                 fields)
          ;; constructor
@@ -2025,7 +2103,7 @@
             (,_lambda ,make-fields
               (,(rename 'vector)
               ',record-marker
-               ,name
+               (quote ,name)
                (,(rename 'vector)
                 ,@make-fields))))
   )))))

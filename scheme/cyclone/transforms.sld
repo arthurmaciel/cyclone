@@ -568,7 +568,7 @@ if (acc) {
              (program?
                ;; This is the main program, keep top level.
                ;; Use 0 here (and below) to ensure a meaningful top-level
-               `((begin 0 ,@(reverse exprs)))
+               `((begin 0 ,@(reverse exprs) (%halt 0)))
              )
              (else
                ;; This is a library, keep inits in their own function
@@ -1001,10 +1001,9 @@ if (acc) {
             (not (assoc 'if renamed)))
        ;; Add a failsafe here in case macro expansion added more
        ;; incomplete if expressions.
-       ;; FUTURE: append the empty (unprinted) value instead of #f
        (let ((new-ast (if (if-else? ast)
                           `(if ,@(map (lambda (a) (convert a renamed)) (cdr ast)))
-                          (convert (append ast '(#f)) renamed))))
+                          (convert (append ast (list (void))) renamed))))
          (cond
           ;; Optimization - convert (if (not a) b c) into (if a c b)
           ((and (app? (if->condition new-ast))
@@ -1130,6 +1129,20 @@ if (acc) {
            (cons 'Cyc-map-loop-1 (map (lambda (a) (convert a renamed)) (cdr ast))))
           ((and (eq? (car ast) 'map) (= (length ast) 4))
            (cons 'Cyc-map-loop-2 (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'write-string) (= (length ast) 2))
+           (cons 'write-string-1 (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'write-string) (= (length ast) 3))
+           (cons 'write-string-2 (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'string>=?) (= (length ast) 3))
+           (cons 'fast-string>=? (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'string>?) (= (length ast) 3))
+           (cons 'fast-string>? (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'string<=?) (= (length ast) 3))
+           (cons 'fast-string<=? (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'string<?) (= (length ast) 3))
+           (cons 'fast-string<? (map (lambda (a) (convert a renamed)) (cdr ast))))
+          ((and (eq? (car ast) 'string=?) (= (length ast) 3))
+           (cons 'fast-string=? (map (lambda (a) (convert a renamed)) (cdr ast))))
           ;; Regular case, alpha convert everything
           (else
            (regular-case)))))
@@ -1328,6 +1341,57 @@ if (acc) {
                       (list (cps-seq (cddr ast) k)) 
                       #t))))
 
+;; TODO: add test cases
+;(define (test)
+;  ((lambda (a . Y) (write Y)) 'x)
+;  ((lambda (a . Y) (write Y)) 'x 'y)
+;  ((lambda (a . Y) (write Y)) 'x 'y 'z)
+;  ((lambda (a b . Y) (write Y)) 'x 'y 'z)
+;  ((lambda Y (write Y)) 'x 'y 'z)
+;    (lambda X (list X)))
+
+          ((and (app? ast)
+                (lambda? (app->fun ast))
+                (equal? 'args:fixed-with-varargs (lambda-formals-type (app->fun ast))))
+           (let ((lam-min-num-args (lambda-num-args (app->fun ast)))
+                 (num-args (length (app->args ast)))
+                 (ltype (lambda-formals-type (app->fun ast))))
+            (cond
+             ((< num-args lam-min-num-args)
+              (error 
+                (string-append
+                  "Not enough arguments passed to anonymous lambda. "
+                  "Expected "
+                  (number->string lam-min-num-args)
+                  " but received "
+                  (number->string num-args))
+                (app->fun ast)))))
+           (let* ((fn (app->fun ast))
+                  (formals (lambda->formals fn))
+                  (formals-lis (pair->list formals)) ;; Formals as proper list
+                  (formals-len (length formals-lis))
+                  (req-args (take (cdr ast) (- formals-len 1)))
+                  (opt-args (drop (cdr ast) (- formals-len 1)))
+                 )
+             ;; Special case, rewrite into a "normal" lambda and try again
+             (cps `((lambda 
+                      ,formals-lis
+                      ,@(cddr fn))
+                    ,@req-args
+                    (list ,@opt-args))
+                  cont-ast) ))
+
+          ((and (app? ast)
+                (lambda? (app->fun ast))
+                (equal? 'args:varargs (lambda-formals-type (app->fun ast))))
+           (let ((fn (app->fun ast)))
+             ;; Special case, rewrite into a "normal" lambda and try again
+             (cps `((lambda 
+                      (,(cadr fn)) 
+                      ,@(cddr fn))
+                    (list ,@(cdr ast)))
+                  cont-ast) ))
+
           ((app? ast)
            ;; Syntax check the function
            (if (const? (car ast))
@@ -1338,7 +1402,8 @@ if (acc) {
               ((lambda? fn)
                ;; Check number of arguments to the lambda
                (let ((lam-min-num-args (lambda-num-args fn))
-                     (num-args (length (app->args ast))))
+                     (num-args (length (app->args ast)))
+                     (ltype (lambda-formals-type fn)))
                 (cond
                  ((< num-args lam-min-num-args)
                   (error 
@@ -1347,35 +1412,26 @@ if (acc) {
                       "Expected "
                       (number->string lam-min-num-args)
                       " but received "
-                      (number->string num-args) 
-                      ":")
+                      (number->string num-args))
                     fn))
                  ((and (> num-args lam-min-num-args)
-                       (equal? 'args:fixed (lambda-formals-type fn)))
+                       (equal? 'args:fixed ltype))
                   (error 
                     (string-append
                       "Too many arguments passed to anonymous lambda. "
                       "Expected "
                       (number->string lam-min-num-args)
                       " but received "
-                      (number->string num-args)
-                      ":")
-                    fn))
-               ))
-               ;; Do conversion
-               (cps-list (app->args ast)
-                         (lambda (vals)
-                           (let ((code 
-                                    (cons (ast:make-lambda
-                                            (lambda->formals fn)
-                                            (list (cps-seq (cddr fn) ;(ast-subx fn)
-                                                           cont-ast)))
-                                           vals)))
-                            (cond
-                              ((equal? (lambda-formals-type fn) 'args:varargs)
-                               (cons 'Cyc-list code)) ;; Manually build up list
-                              (else
-                                code))))))
+                      (number->string num-args))
+                    fn)))
+                ;; Do conversion
+                (cps-list (app->args ast)
+                          (lambda (vals)
+                            (cons (ast:make-lambda
+                                    (lambda->formals fn)
+                                    (list (cps-seq (cddr fn) ;(ast-subx fn)
+                                                   cont-ast)))
+                                   vals)))))
               (else
                  (cps-list ast ;(ast-subx ast)
                            (lambda (args)

@@ -1,6 +1,5 @@
 # Cyclone Scheme
-# Copyright (c) 2014, Justin Ethier
-# Copyright (c) 2017, Koz Ross
+# Copyright (c) 2014-2020, Justin Ethier
 # All rights reserved.
 
 include Makefile.config
@@ -37,8 +36,8 @@ TEST_SRC = $(TEST_DIR)/unit-tests.scm \
 					 $(TEST_DIR)/srfi-28-tests.scm \
 					 $(TEST_DIR)/srfi-60-tests.scm \
 					 $(TEST_DIR)/srfi-121-tests.scm \
-					 $(TEST_DIR)/srfi-143-tests.scm \
-					 $(TEST_DIR)/array-list-tests.scm
+					 $(TEST_DIR)/srfi-128-162-tests.scm \
+					 $(TEST_DIR)/srfi-143-tests.scm
 TESTS = $(basename $(TEST_SRC))
 
 # Primary rules (of interest to an end user)
@@ -49,6 +48,7 @@ test : libs $(TESTS)
 
 example :
 	cd $(EXAMPLE_DIR) ; $(MAKE)
+	cd $(EXAMPLE_DIR)/call-scm-from-c ; $(MAKE)
 
 clean :
 	rm -rf test.txt a.out *.so *.o *.a *.out tags cyclone icyc scheme/*.o scheme/*.so scheme/*.c scheme/*.meta srfi/*.c srfi/*.meta srfi/*.o srfi/*.so scheme/cyclone/*.o scheme/cyclone/*.so scheme/cyclone/*.c scheme/cyclone/*.meta libs/cyclone/*.o libs/cyclone/*.so libs/cyclone/*.c libs/cyclone/*.meta cyclone.c dispatch.c icyc.c generate-c.c generate-c
@@ -58,7 +58,6 @@ clean :
 	rm -f tests/srfi-60-tests
 	rm -f tests/srfi-121-tests
 	rm -f tests/srfi-143-tests
-	rm -f tests/array-list-tests
 	rm -f tests/macro-hygiene
 	rm -f tests/match-tests
 	cd $(CYC_BN_LIB_SUBDIR) ; $(MAKE) clean
@@ -121,9 +120,10 @@ uninstall :
 tags :
 	ctags -R *
 
-indent : gc.c runtime.c mstreams.c $(HEADER_DIR)/*.h
+indent : gc.c runtime.c ffi.c mstreams.c $(HEADER_DIR)/*.h
 	$(INDENT_CMD) gc.c
 	$(INDENT_CMD) runtime.c
+	$(INDENT_CMD) ffi.c
 	$(INDENT_CMD) mstreams.c
 	$(INDENT_CMD) $(HEADER_DIR)/*.h
 
@@ -185,6 +185,9 @@ dispatch.o : dispatch.c $(HEADERS)
 gc.o : gc.c $(HEADERS)
 	$(CCOMP) -std=gnu99 -c $< -o $@
 
+ffi.o : ffi.c $(HEADERS)
+	$(CCOMP) -c $< -o $@
+
 mstreams.o : mstreams.c $(HEADERS)
 	$(CCOMP) -c \
 					-DCYC_HAVE_OPEN_MEMSTREAM=$(CYC_PLATFORM_HAS_MEMSTREAM) \
@@ -205,7 +208,7 @@ runtime.o : runtime.c $(HEADERS)
 					-DCYC_PLATFORM=\"$(PLATFORM)\" \
 					$< -o $@
 
-libcyclone.a : runtime.o gc.o dispatch.o mstreams.o hashset.o
+libcyclone.a : runtime.o gc.o dispatch.o ffi.o mstreams.o hashset.o
 	$(CREATE_LIBRARY_COMMAND) $(CREATE_LIBRARY_FLAGS) $@ $&
 	$(RANLIB_COMMAND)
 # Instructions from: http://www.adp-gmbh.ch/cpp/gcc/create_lib.html
@@ -238,6 +241,7 @@ bootstrap : icyc libs
 	cp srfi/*.sld $(BOOTSTRAP_DIR)/srfi
 	cp srfi/*.scm $(BOOTSTRAP_DIR)/srfi
 	cp runtime.c $(BOOTSTRAP_DIR)
+	cp ffi.c $(BOOTSTRAP_DIR)
 	cp mstreams.c $(BOOTSTRAP_DIR)
 	cp hashset.c $(BOOTSTRAP_DIR)
 	cp gc.c $(BOOTSTRAP_DIR)
@@ -281,10 +285,6 @@ bootstrap : icyc libs
 	cp libs/cyclone/test.c $(BOOTSTRAP_DIR)/cyclone
 	cp libs/cyclone/test.meta $(BOOTSTRAP_DIR)/cyclone
 	cp libs/cyclone/test.scm $(BOOTSTRAP_DIR)/cyclone
-	cp scheme/cyclone/array-list.c $(BOOTSTRAP_DIR)/scheme/cyclone
-	cp scheme/cyclone/array-list.meta $(BOOTSTRAP_DIR)/scheme/cyclone
-	cp scheme/cyclone/array-list.sld $(BOOTSTRAP_DIR)/scheme/cyclone #just in case
-	cp scheme/cyclone/array-list.scm $(BOOTSTRAP_DIR)/scheme/cyclone #just in case
 	cp srfi/1.c $(BOOTSTRAP_DIR)/srfi
 	cp srfi/2.c $(BOOTSTRAP_DIR)/srfi
 	cp srfi/2.meta $(BOOTSTRAP_DIR)/srfi

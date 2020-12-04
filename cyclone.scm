@@ -182,7 +182,7 @@
       (report:elapsed "imports:")
       (trace:info "imports:")
       (trace:info imports)
-      (set! imported-vars (lib:imports->idb imports append-dirs prepend-dirs))
+      (set! imported-vars (lib:imports->idb imports append-dirs prepend-dirs (base-expander)))
       (report:elapsed "resolved imports:")
       (trace:info "resolved imports:")
       (trace:info imported-vars)
@@ -245,7 +245,7 @@
             (set! imports (append imports (car program:imports/code)))
             (trace:info "imports:")
             (trace:info imports)
-            (set! imported-vars (lib:imports->idb imports append-dirs prepend-dirs))
+            (set! imported-vars (lib:imports->idb imports append-dirs prepend-dirs (base-expander)))
             (report:elapsed "resolved imports:")
             (trace:info "resolved imports:")
             (trace:info imported-vars)
@@ -255,13 +255,21 @@
               (trace:info meta))
             (set! input-program (cdr program:imports/code))
             ;(set! lib-deps (append lib-deps (lib:get-all-import-deps (car program:imports/code) append-dirs prepend-dirs)))
-            (let ((new-lib-deps (lib:get-all-import-deps (car program:imports/code) append-dirs prepend-dirs)))
+            (let ((changed #f)
+                  (new-lib-deps (lib:get-all-import-deps (car program:imports/code) append-dirs prepend-dirs #f)))
               (for-each
                 (lambda (dep)
-                  (if (not (member dep lib-deps))
-                      (set! lib-deps (cons dep lib-deps))))
+                  (when (not (member dep lib-deps))
+                    (set! changed #t)
+                    (set! lib-deps (cons dep lib-deps))))
                 new-lib-deps)
-              (change-lib-deps! lib-deps))
+              (when changed
+                ;; Library dependencies can change if additional import
+                ;; expressions were encountered during macro expansion.
+                ;; If so, update the list of dependencies now
+                (set! ;; Use new deps
+                  lib-deps 
+                  (change-lib-deps! lib-deps)))) ;; Caller updates and returns new deps
             (trace:info lib-deps)
           )))
       ;; END additional top-level imports
@@ -279,8 +287,10 @@
         (for-each 
           (lambda (lib-dep)
             (when (recompile? lib-dep append-dirs prepend-dirs)
-              (system (string-append "cyclone " 
-                        (lib:import->filename lib-dep ".sld" append-dirs prepend-dirs)))))
+              (let ((result (system (string-append "cyclone " 
+                                      (lib:import->filename lib-dep ".sld" append-dirs prepend-dirs)))))
+                (when (> result 0)
+                  (error "Unable to compile library" lib-dep)))))
           lib-deps))
 
       ;; Validate syntax of basic forms
@@ -680,10 +690,12 @@
 (define (read-file filename)
   (call-with-input-file filename
     (lambda (port)
-      (read-all port))))
+      (read-all/source port filename))))
 
 ;; Compile and emit:
-(define (run-compiler args cc? cc-prog cc-exec cc-lib cc-so cc-prog-linker-opts append-dirs prepend-dirs)
+(define (run-compiler args cc? cc-prog cc-exec cc-lib cc-so 
+                      cc-prog-linker-opts cc-prog-linker-objs 
+                      append-dirs prepend-dirs)
   (let* ((in-file (car args))
          (expander (base-expander))
          (in-prog-raw (read-file in-file))
@@ -702,7 +714,7 @@
          (lib-deps 
            (if (and program?
                     (not (null? (car program:imports/code))))
-             (lib:get-all-import-deps (car program:imports/code) append-dirs prepend-dirs)
+             (lib:get-all-import-deps (car program:imports/code) append-dirs prepend-dirs expander)
             '()))
          (c-linker-options
           (lib:get-all-c-linker-options lib-deps append-dirs prepend-dirs))
@@ -724,7 +736,23 @@
                    program:imports/code 
                    lib-deps 
                    (lambda (new-lib-deps)
-                     (set! lib-deps new-lib-deps))
+                     ;; Deps changed so we need to
+                     ;; resolve dependency tree again
+                     (set! 
+                       lib-deps
+                       (lib:get-all-import-deps 
+                         new-lib-deps
+                         append-dirs 
+                         prepend-dirs 
+                         expander))
+                     ;; Recompute linker options
+                     (set! c-linker-options
+                       (lib:get-all-c-linker-options 
+                         lib-deps 
+                         append-dirs 
+                         prepend-dirs))
+                     ;; Return new deps
+                     lib-deps)
                    in-file 
                    append-dirs 
                    prepend-dirs)))))
@@ -734,12 +762,14 @@
     (cond
       (program?
         (letrec ((objs-str 
-                  (apply
-                    string-append
-                    (map
-                      (lambda (i)
-                        (string-append " " (lib:import->filename i ".o" append-dirs prepend-dirs) " "))
-                      lib-deps)))
+                  (string-append
+                    cc-prog-linker-objs
+                    (apply
+                      string-append
+                      (map
+                        (lambda (i)
+                          (string-append " " (lib:import->filename i ".o" append-dirs prepend-dirs) " "))
+                        lib-deps))))
                  (comp-prog-cmd 
                    (string-replace-all 
                      (string-replace-all 
@@ -810,7 +840,7 @@
 ;; Will return a list of values for the option.
 ;; For example:
 ;;  ("-a" "1" "2") ==> ("1")
-;;  ("-a" "1" -a "2") ==> ("1" "2")
+;;  ("-a" "1" "-a" "2") ==> ("1" "2")
 (define (collect-opt-values args opt)
   (cdr
     (foldl
@@ -842,6 +872,7 @@
        (cc-lib  (apply string-append (collect-opt-values args "-CL")))
        (cc-so   (apply string-append (collect-opt-values args "-CS")))
        (cc-linker-opts (apply string-append (collect-opt-values args "-CLNK")))
+       (cc-linker-extra-objects (apply string-append (collect-opt-values args "-COBJ")))
        (opt-beta-expand-thresh (collect-opt-values args "-opt-be"))
        (append-dirs (collect-opt-values args "-A"))
        (prepend-dirs (collect-opt-values args "-I")))
@@ -895,6 +926,10 @@ General options:
                  a library module.
  -CS cc-commands Specify a custom command line for the C compiler to compile
                  a shared object module.
+ -COBJ objects   Specify additional object files to send to the compiler
+                 when linking a program. For example, this may be used
+                 to link an executable where some object files are generated
+                 via a makefile instead of by Cyclone.
  -CLNK option    Specify a custom command to provide as a linker option,
                  EG: \"-lcurl\".
  -d              Only generate intermediate C files, do not compile them
@@ -947,5 +982,30 @@ Debug options:
      (display "cyclone: no input file")
      (newline))
     (else
-      (run-compiler non-opts compile? cc-prog cc-exec cc-lib cc-so cc-linker-opts append-dirs prepend-dirs))))
+     (with-handler
+      (lambda (err)
+        ;; Top-level exception handler for the compiler.
+        ;;
+        ;; We set this up since call history is generally
+        ;; pointless for users of the compiler, so we don't
+        ;; want to display it.
+        (parameterize ((current-output-port (current-error-port)))
+          (cond
+           ((and (string? (car err))
+                 (equal? (substring (car err) 0 8)
+                         "at line "))
+            (display "Error "))
+           (else
+            (display "Error: ")))
+          (display (car err))
+          (display ": ")
+          (newline)
+          (for-each
+            (lambda (obj)
+              (write obj)
+              (newline))
+            (cdr err))
+          (newline)
+          (exit 1)))
+      (run-compiler non-opts compile? cc-prog cc-exec cc-lib cc-so cc-linker-opts cc-linker-extra-objects append-dirs prepend-dirs)))))
 

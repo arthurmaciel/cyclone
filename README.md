@@ -10,7 +10,7 @@
 
 [![Github CI - Windows](https://github.com/justinethier/cyclone-bootstrap/workflows/Windows%20MSYS2%20Build/badge.svg)](https://github.com/justinethier/cyclone-bootstrap)
 
-Cyclone is a brand-new Scheme-to-C compiler with the goal of supporting real-world application development using the R<sup>7</sup>RS Scheme Language standard. We provide modern features and a stable system capable of generating fast native binaries.
+Cyclone Scheme is a brand-new compiler that allows real-world application development using the R<sup>7</sup>RS Scheme Language standard. We provide modern features and a stable system capable of generating fast native binaries.
 
 [Cheney on the MTA](https://github.com/justinethier/cyclone/raw/master/docs/research-papers/CheneyMTA.pdf) is used by Cyclone's runtime to implement full tail recursion, continuations, and generational garbage collection. In addition, the Cheney on the MTA concept has been extended to allow execution of multiple native threads. An on-the-fly garbage collector is used to manage the second-generation heap and perform major collections without "stopping the world".
 
@@ -27,6 +27,7 @@ Cyclone is a brand-new Scheme-to-C compiler with the goal of supporting real-wor
 - A concurrent, generational garbage collector based on Cheney on the MTA
 - Includes an optimizing Scheme-to-C compiler,
 - ... as well as an interpreter for debugging
+- A [Package Manager](https://github.com/cyclone-scheme/cyclone-winds) and a growing list of packages.
 - Support for [many popular SRFI's](docs/API.md#srfi-libraries)
 - Online user manual and API documentation
 - Support for Linux, Windows, FreeBSD, and Mac platforms. 
@@ -99,6 +100,14 @@ And the `icyc` command to start an interactive interpreter. Note you can use [`r
     hello-world
 
 Read the documentation below for more information on how to use Cyclone.
+
+# Package Manager
+
+![Cyclone Winds](docs/images/cyclone-winds-small.png "Cyclone Winds")
+
+The `cyclone-winds` package manager provides the ability to install packaged libraries and programs for Cyclone. See the [cyclone-winds](https://github.com/cyclone-scheme/cyclone-winds#cyclone-winds) site for more information.
+
+The [Cyclone-Winds wiki](https://github.com/cyclone-scheme/cyclone-winds/wiki) contains a full list of packages with documentation.
 
 # Documentation
 

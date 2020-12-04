@@ -48,7 +48,8 @@ const char *tag_names[] = {
       /*symbol_tag    */ , "symbol"
       /*vector_tag    */ , "vector"
       /*complex_num_tag*/ , "complex number"
-      /*atomic_tag*/ , "atomic"
+      /*atomic_tag*/     , "atomic"
+      /*void_tag*/       , "void"
   , "Reserved for future use"
 };
 
@@ -190,8 +191,10 @@ int _cyc_argc = 0;
 char **_cyc_argv = NULL;
 
 static symbol_type __EOF = { {0}, eof_tag, ""};  // symbol_type in lieu of custom type
+static symbol_type __VOID = { {0}, void_tag, ""};  // symbol_type in lieu of custom type
 
 const object Cyc_EOF = &__EOF;
+const object Cyc_VOID = &__VOID;
 static ck_hs_t lib_table;
 static ck_hs_t symbol_table;
 static int symbol_table_initial_size = 4096;
@@ -403,12 +406,16 @@ void Cyc_st_print(void *data, FILE * out)
      not be an issue in practice? a bit risky to ignore though
    */
   gc_thread_data *thd = (gc_thread_data *) data;
-  int i = (thd->stack_trace_idx + 1) % MAX_STACK_TRACES;
+  int n = 1;
+  int i = (thd->stack_trace_idx - 1);
+  if (i < 0) { i = MAX_STACK_TRACES - 1; }
+
   while (i != thd->stack_trace_idx) {
     if (thd->stack_traces[i]) {
-      fprintf(out, "%s\n", thd->stack_traces[i]);
+      fprintf(out, "[%d] %s\n", n++, thd->stack_traces[i]);
     }
-    i = (i + 1) % MAX_STACK_TRACES;
+    i = (i - 1);
+    if (i < 0) { i = MAX_STACK_TRACES - 1; }
   }
 }
 
@@ -675,7 +682,7 @@ object Cyc_default_exception_handler(void *data, int argc, closure _,
     }
   }
 
-  fprintf(stderr, "\nCall history:\n");
+  fprintf(stderr, "\nCall history, most recent first:\n");
   Cyc_st_print(data, stderr);
   fprintf(stderr, "\n");
   //raise(SIGINT); // break into debugger, unix only
@@ -1032,6 +1039,8 @@ object Cyc_display(void *data, object x, FILE * port)
     break;
   case eof_tag:
     fprintf(port, "<EOF>");
+    break;
+  case void_tag:
     break;
   case port_tag:
     fprintf(port, "<port %p>", ((port_type *) x)->fp);
@@ -1813,7 +1822,7 @@ object FUNC_FAST_OP(void *data, object x, object y) { \
     } else if (tx == -1         && ty == bignum_tag) { \
       return Cyc_bignum_cmp(BN_CMP, x, tx, y, ty) ? boolean_t : boolean_f; \
     } else if (tx == double_tag && ty == bignum_tag) { \
-      return (double_value(x)) OP mp_get_double(&bignum_value(x)) ? boolean_t : boolean_f; \
+      return (double_value(x)) OP mp_get_double(&bignum_value(y)) ? boolean_t : boolean_f; \
     } else if (tx == complex_num_tag && ty == complex_num_tag) { \
       return ((complex_num_value(x)) == (complex_num_value(y))) ? boolean_t : boolean_f; \
     } else if (tx == complex_num_tag && ty != complex_num_tag) { \
@@ -2035,6 +2044,18 @@ object Cyc_is_procedure(void *data, object o)
 //    return boolean_t;
 //  return boolean_f;
 //}
+
+object Cyc_eqv(object x, object y)
+{
+  if (Cyc_eq(x, y) == boolean_t) {
+    return boolean_t;
+  } else if (Cyc_is_number(x) == boolean_t &&
+             equalp(x, y) == boolean_t) {
+    return boolean_t;
+  } else { 
+    return boolean_f;
+  }
+}
 
 object Cyc_is_immutable(object obj)
 {
@@ -4833,7 +4854,7 @@ void _eq_127(void *data, object cont, object args)
 void _eqv_127(void *data, object cont, object args)
 {
   Cyc_check_num_args(data, "eqv?", 2, args);
-  _eq_127(data, cont, args);
+  return_closcall1(data, cont, Cyc_eqv(car(args), cadr(args)));
 }
 
 void _equal_127(void *data, object cont, object args)
@@ -5857,6 +5878,7 @@ static char *gc_move(char *obj, gc_thread_data * thd, int *alloci, int *heap_gro
   case forward_tag:
     return (char *)forward(obj);
   case eof_tag:
+  case void_tag:
     break;
   case primitive_tag:
     break;
@@ -6034,6 +6056,7 @@ int gc_minor(void *data, object low_limit, object high_limit, closure cont,
       break;
       // These types are not heap-allocated
     case eof_tag:
+    case void_tag:
     case primitive_tag:
     case symbol_tag:
     case boolean_tag:
@@ -6100,6 +6123,7 @@ void Cyc_make_shared_object(void *data, object k, object obj)
   //  symbol_tag      = 19
   //  closure0_tag    = 3
   //  eof_tag         = 9
+  //  void_tag
   //  macro_tag       = 13
   //  primitive_tag   = 17
 
@@ -6581,8 +6605,9 @@ void *gc_alloc_pair(gc_thread_data *data, object head, object tail)
 /**
  * Thread initialization function only called from within the runtime
  */
-void *Cyc_init_thread(object thread_and_thunk)
+void *Cyc_init_thread(object thread_and_thunk, int argc, object *args)
 {
+  int i;
   vector_type *t;
   c_opaque_type *o;
   object op, parent, child, tmp;
@@ -6604,7 +6629,18 @@ void *Cyc_init_thread(object thread_and_thunk)
   thd->scm_thread_obj = car(thread_and_thunk);
   thd->gc_cont = cdr(thread_and_thunk);
   thd->gc_num_args = 1;
-  thd->gc_args[0] = &Cyc_91end_91thread_67_primitive;
+  if (t->num_elements >= 7 && t->elements[6] != boolean_f) {
+    thd->gc_args[0] = t->elements[6];
+  } else {
+    thd->gc_args[0] = &Cyc_91end_91thread_67_primitive;
+  }
+
+  if (argc > 0) {
+    thd->gc_num_args = argc + 1;
+    for (i = 0; i < argc; i++) {
+      thd->gc_args[i + 1] = args[i];
+    }
+  }
   thd->thread_id = pthread_self();
 
   // Copy thread params from the calling thread
@@ -6635,6 +6671,11 @@ void *Cyc_init_thread(object thread_and_thunk)
   return NULL;
 }
 
+void *_Cyc_init_thread(object thread_and_thunk)
+{
+  return Cyc_init_thread(thread_and_thunk, 0, NULL);
+}
+
 /**
  * Spawn a new thread to execute the given thunk
  */
@@ -6663,7 +6704,7 @@ to look at the lock-free structures provided by ck?
   pthread_attr_t attr;
   pthread_attr_init(&attr);
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  if (pthread_create(&thread, &attr, Cyc_init_thread, thread_and_thunk)) {
+  if (pthread_create(&thread, &attr, _Cyc_init_thread, thread_and_thunk)) {
     fprintf(stderr, "Error creating a new thread\n");
     exit(1);
   }
@@ -7082,7 +7123,8 @@ static int _read_is_hex_digit(char c)
 static void _read_string(void *data, object cont, port_type *p) 
 {
   char c;
-  int escaped = 0;
+  int escaped = 0, escaped_whitespace = 0, 
+      ewrn = 0; // esc whitespace read newline
   while(1) {
     // Read more data into buffer, if needed
     if (p->buf_idx == p->mem_buf_len) {
@@ -7092,6 +7134,29 @@ static void _read_string(void *data, object cont, port_type *p)
     }
     c = p->mem_buf[p->buf_idx++];
     p->col_num++;
+
+    if (escaped_whitespace) {
+      switch (c) {
+      case '\r':
+      case '\t':
+      case ' ':
+        p->col_num++;
+        continue;
+        break;
+      case '\n':
+        if (ewrn == 0) {
+          ewrn = 1;
+          p->line_num++;
+          p->col_num = 1;
+          continue;
+        }
+        break;
+      default:
+        escaped_whitespace = 0;
+        ewrn = 0;
+        break;
+      }
+    }
 
     if (escaped) {
       escaped = 0;
@@ -7156,6 +7221,19 @@ static void _read_string(void *data, object cont, port_type *p)
         }
         break;
       }
+      case '\r':
+      case '\t':
+      case ' ':
+        escaped_whitespace = 1;
+        ewrn = 0;
+        p->col_num++;
+        break;
+      case '\n':
+        escaped_whitespace = 1;
+        ewrn = 1;
+        p->line_num++;
+        p->col_num = 1;
+        break;
       default:
         _read_error(data, p, "invalid escape character in string"); // TODO: char
         break;
